@@ -1,16 +1,29 @@
 use anyhow::anyhow;
+use vulkano::swapchain::{acquire_next_image, present};
+use vulkano::sync;
 
 use std::sync::Arc;
+use std::time::Duration;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
 
+use crate::gpu::RendererCreationError;
+
 mod gpu;
 
-struct Application {
-    event_loop: EventLoop<()>,
-    window: Window,
-    context: gpu::Context,
+mod vs {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/shaders/main.vert"
+    }
+}
+
+mod fs {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/main.frag"
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -25,14 +38,23 @@ fn main() -> anyhow::Result<()> {
         context.physical_device().properties().device_name
     );
 
-    context.swapchain();
+    let vertex_shader = vs::Shader::load(context.device().clone()).unwrap();
+    let fragment_shader = fs::Shader::load(context.device().clone()).unwrap();
 
-    event_loop.run(|event, looop, flow| match event {
+    let renderer = gpu::Renderer::new(
+        &context,
+        vertex_shader.main_entry_point(),
+        fragment_shader.main_entry_point(),
+    )?;
+
+    event_loop.run(move |event, looop, flow| match event {
         Event::WindowEvent {
             event: WindowEvent::CloseRequested,
             ..
         } => *flow = ControlFlow::Exit,
-        Event::RedrawRequested(id) => {}
+        Event::RedrawRequested(id) => {
+            renderer.draw().unwrap();
+        }
         _ => {}
     });
 

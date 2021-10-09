@@ -1,0 +1,10 @@
+UNASSIGNED-BestPractices-vkCreateInstance-deprecated-extension(WARN / SPEC): msgNum: -1861097675 - Validation Warning: [ UNASSIGNED-BestPractices-vkCreateInstance-deprecated-extension ] Object 0: VK_NULL_HANDLE, type = VK_OBJECT_TYPE_INSTANCE; | MessageID = 0x9111e735 | CreateInstance(): Attempting to enable deprecated extension VK_KHR_get_physical_device_properties2, but this extension has been promoted to VK_VERSION_1_1.
+    Objects: 1
+        [0] 0, type: 1, name: NULL
+UNASSIGNED-khronos-validation-createinstance-status-message(INFO / SPEC): msgNum: -671457468 - Validation Information: [ UNASSIGNED-khronos-validation-createinstance-status-message ] Object 0: handle = 0x2a970f01240, type = VK_OBJECT_TYPE_INSTANCE; | MessageID = 0xd7fa5f44 | Khronos Validation Layer Active:
+    Settings File: Found at C:\Users\jonas\AppData\Local\LunarG\vkconfig\override\vk_layer_settings.txt specified by VkConfig application override.
+    Current Enables: VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT, VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT, VALIDATION_CHECK_ENABLE_VENDOR_SPECIFIC_AMD.
+    Current Disables: None.
+
+    Objects: 1
+        [0] 0x2a970f01240, type: 1, name: NULL

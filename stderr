@@ -1,0 +1,7 @@
+UNASSIGNED-khronos-validation-createinstance-status-message(INFO / SPEC): msgNum: -671457468 - Validation Information: [ UNASSIGNED-khronos-validation-createinstance-status-message ] Object 0: handle = 0x1d0a792b990, type = VK_OBJECT_TYPE_INSTANCE; | MessageID = 0xd7fa5f44 | Khronos Validation Layer Active:
+    Settings File: Found at C:\Users\jonas\AppData\Local\LunarG\vkconfig\override\vk_layer_settings.txt specified by VkConfig application override.
+    Current Enables: None.
+    Current Disables: VK_VALIDATION_FEATURE_DISABLE_UNIQUE_HANDLES_EXT.
+
+    Objects: 1
+        [0] 0x1d0a792b990, type: 1, name: NULL
