@@ -1,4 +1,5 @@
 #![allow(unused)]
+
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::mem::swap;
@@ -8,12 +9,12 @@ use derive_getters::Getters;
 use thiserror::Error;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, BeginRenderPassError, BuildError, CommandBufferExecError,
-    CommandBufferUsage, DrawError, ExecuteCommandsError, SecondaryAutoCommandBuffer,
+    CommandBufferUsage, DispatchError, DrawError, ExecuteCommandsError, SecondaryAutoCommandBuffer,
     SubpassContents,
 };
 use vulkano::descriptor_set::layout::DescriptorSetLayout;
 use vulkano::descriptor_set::persistent::PersistentDescriptorSetBuilder;
-use vulkano::descriptor_set::PersistentDescriptorSet;
+use vulkano::descriptor_set::{DescriptorSetError, PersistentDescriptorSet};
 use vulkano::device::physical::{PhysicalDevice, QueueFamily};
 use vulkano::device::{Device, DeviceCreationError, DeviceExtensions, Features, Queue};
 use vulkano::image::view::{ImageView, ImageViewCreationError};
@@ -25,18 +26,26 @@ use vulkano::instance::debug::{
 };
 use vulkano::instance::{Instance, InstanceCreationError, InstanceExtensions};
 use vulkano::pipeline::layout::PipelineLayout;
-use vulkano::pipeline::shader::{GraphicsEntryPoint, ShaderModule};
+use vulkano::pipeline::shader::{
+    ComputeEntryPoint, EntryPointAbstract, GraphicsEntryPoint, ShaderModule,
+    SpecializationConstants,
+};
 use vulkano::pipeline::vertex::VertexDefinition;
 use vulkano::pipeline::viewport::Viewport;
-use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineCreationError};
-use vulkano::render_pass::{
-    self, AttachmentDesc, Framebuffer, FramebufferCreationError, LoadOp, RenderPass,
-    RenderPassCreationError, RenderPassDesc, StoreOp, Subpass, SubpassDependencyDesc, SubpassDesc,
+use vulkano::pipeline::{
+    ComputePipeline, ComputePipelineCreationError, GraphicsPipeline, GraphicsPipelineCreationError,
+    PipelineBindPoint,
 };
+use vulkano::render_pass::{
+    self, AttachmentDesc, Framebuffer, FramebufferAbstract, FramebufferCreationError, LoadOp,
+    RenderPass, RenderPassCreationError, RenderPassDesc, StoreOp, Subpass, SubpassDependencyDesc,
+    SubpassDesc,
+};
+use vulkano::sampler::{Filter, MipmapMode, Sampler, SamplerAddressMode, SamplerCreationError};
 use vulkano::swapchain::{
     acquire_next_image, present, Surface, SurfaceCreationError, Swapchain, SwapchainCreationError,
 };
-use vulkano::sync::GpuFuture;
+use vulkano::sync::{self, GpuFuture};
 use vulkano::{OomError, Version};
 use winit::dpi::PhysicalSize;
 use winit::window::{Fullscreen, Window};
@@ -61,11 +70,10 @@ pub enum ContextCreationError {
     ImageViewCreationError(#[from] ImageViewCreationError),
 }
 
-#[derive(Clone, Getters)]
+#[derive(Clone)]
 pub struct Context {
     window: Arc<Window>,
     instance: Arc<Instance>,
-    #[getter(skip)]
     phys_index: usize,
     device: Arc<Device>,
     graphics_queue: Arc<Queue>,
@@ -81,6 +89,7 @@ impl Context {
 
         let instance = {
             let instance_extensions = InstanceExtensions {
+                khr_get_display_properties2: false,
                 ..vulkano_win::required_extensions()
             };
 
@@ -98,8 +107,10 @@ impl Context {
 
         let (device, graphics_queue, compute_queue) = {
             let features = Features::none();
+
             let device_extensions = DeviceExtensions {
                 khr_swapchain: true,
+                khr_storage_buffer_storage_class: true,
                 ..DeviceExtensions::none()
             };
 
@@ -110,7 +121,9 @@ impl Context {
                 queue_families.as_vec(),
             )?;
 
-            (device, queues.next().unwrap(), queues.next().unwrap())
+            let queue = queues.next().unwrap();
+
+            (device, queue.clone(), queue)
         };
 
         let (swapchain, swapchain_images) = Swapchain::start(device.clone(), surface.clone())
@@ -136,8 +149,42 @@ impl Context {
         })
     }
 
+    pub fn window(&self) -> Arc<Window> {
+        self.window.clone()
+    }
+
+    pub fn instance(&self) -> Arc<Instance> {
+        self.instance.clone()
+    }
+
     pub fn physical_device(&self) -> PhysicalDevice {
         PhysicalDevice::from_index(&self.instance, self.phys_index).unwrap()
+    }
+
+    pub fn device(&self) -> Arc<Device> {
+        self.device.clone()
+    }
+
+    pub fn graphics_queue(&self) -> Arc<Queue> {
+        self.graphics_queue.clone()
+    }
+
+    pub fn compute_queue(&self) -> Arc<Queue> {
+        self.compute_queue.clone()
+    }
+
+    pub fn swapchain(&self) -> Arc<Swapchain<Arc<Window>>> {
+        self.swapchain.clone()
+    }
+
+    pub fn swapchain_images(&self) -> Arc<Vec<Arc<SwapchainImage<Arc<Window>>>>> {
+        self.swapchain_images.clone()
+    }
+
+    pub fn swapchain_image_views(
+        &self,
+    ) -> Arc<Vec<Arc<ImageView<Arc<SwapchainImage<Arc<Window>>>>>>> {
+        self.swapchain_image_views.clone()
     }
 }
 
@@ -156,16 +203,7 @@ impl<'a> QueueFamilies<'a> {
             .find(|qf| qf.supports_graphics() && surface.is_supported(*qf).is_ok())
             .ok_or(ContextCreationError::NoQueueFamilyFound)?;
 
-        let compute_family =
-            if graphics_family.supports_compute() && graphics_family.queues_count() > 1 {
-                graphics_family
-            } else {
-                phys_device
-                    .queue_families()
-                    .filter(|qf| *qf != graphics_family)
-                    .find(QueueFamily::supports_compute)
-                    .ok_or(ContextCreationError::NoQueueFamilyFound)?
-            };
+        let compute_family = graphics_family;
 
         Ok(Self {
             graphics: graphics_family,
@@ -174,7 +212,7 @@ impl<'a> QueueFamilies<'a> {
     }
 
     fn as_vec(&self) -> Vec<(QueueFamily, f32)> {
-        vec![(self.graphics, 1.0), (self.compute, 1.0)]
+        vec![(self.graphics, 1.0)]
     }
 }
 
@@ -184,6 +222,8 @@ pub enum RendererCreationError {
     RenderPassCreationError(#[from] RenderPassCreationError),
     #[error("Failed to create graphics pipeline.")]
     PipelineCreationError(#[from] GraphicsPipelineCreationError),
+    #[error("Failed to create sampler.")]
+    SamplerCreationError(#[from] SamplerCreationError),
 }
 
 #[derive(Error, Debug)]
@@ -198,16 +238,17 @@ pub enum RendererDrawError {
     FramebufferCreationError(#[from] FramebufferCreationError),
     #[error("Failed to begin render pass.")]
     BeginRenderPassError(#[from] BeginRenderPassError),
-    #[error("Failed to create secondary buffer.")]
-    ExecuteCommandsError(#[from] ExecuteCommandsError),
     #[error("Failed to execute command buffer.")]
     CommandBufferExecError(#[from] CommandBufferExecError),
+    #[error("Failed to create descriptor set.")]
+    DescriptorSetError(#[from] DescriptorSetError),
 }
 
 pub struct Renderer {
     context: Context,
     render_pass: Arc<RenderPass>,
     pipeline: Arc<GraphicsPipeline>,
+    sampler: Arc<Sampler>,
 }
 
 impl Renderer {
@@ -219,7 +260,7 @@ impl Renderer {
         let context = context.clone();
 
         let render_pass = Arc::new(RenderPass::new(
-            context.device.clone(),
+            context.device(),
             RenderPassDesc::new(
                 vec![AttachmentDesc {
                     format: context.swapchain().format(),
@@ -250,19 +291,38 @@ impl Renderer {
                 .viewports_dynamic_scissors_irrelevant(1)
                 .depth_stencil_disabled()
                 .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
-                .build(context.device().clone())?,
+                .build(context.device())?,
         );
+
+        let sampler = Sampler::new(
+            context.device(),
+            Filter::Nearest,
+            Filter::Nearest,
+            MipmapMode::Nearest,
+            SamplerAddressMode::Repeat,
+            SamplerAddressMode::Repeat,
+            SamplerAddressMode::Repeat,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        )?;
 
         Ok(Self {
             context,
             render_pass,
             pipeline,
+            sampler,
         })
     }
 
-    pub fn draw(&self) -> Result<(), RendererDrawError> {
+    pub fn draw(
+        &self,
+        input_images: &[Arc<dyn ImageViewAbstract>],
+        before: Option<Box<dyn GpuFuture>>,
+    ) -> Result<Box<dyn GpuFuture>, RendererDrawError> {
         let (image_index, _, image_future) =
-            acquire_next_image(self.context.swapchain().clone(), None).unwrap();
+            acquire_next_image(self.context.swapchain(), None).unwrap();
 
         let framebuffer = Arc::new(
             Framebuffer::start(self.render_pass.clone())
@@ -273,10 +333,20 @@ impl Renderer {
         let dimensions = self.context.swapchain().dimensions();
 
         let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
-            self.context.device.clone(),
+            self.context.device(),
             self.context.graphics_queue().family(),
             CommandBufferUsage::OneTimeSubmit,
         )?;
+
+        let mut descriptor_set_builder = PersistentDescriptorSet::start(
+            self.pipeline.layout().descriptor_set_layouts()[0].clone(),
+        );
+
+        for image in input_images {
+            descriptor_set_builder.add_sampled_image(image.clone(), self.sampler.clone())?;
+        }
+
+        let set = Arc::new(descriptor_set_builder.build()?);
 
         command_buffer_builder
             .begin_render_pass(framebuffer, SubpassContents::Inline, [[1.0; 4].into()])?
@@ -289,21 +359,115 @@ impl Renderer {
                 }],
             )
             .bind_pipeline_graphics(self.pipeline.clone())
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.pipeline.layout().clone(),
+                0,
+                set.clone(),
+            )
             .draw(6, 1, 0, 0)?
             .end_render_pass();
 
         let command_buffer = command_buffer_builder.build()?;
 
-        let drawing_done_future =
-            image_future.then_execute(self.context.graphics_queue().clone(), command_buffer)?;
-
-        present(
-            self.context.swapchain().clone(),
-            drawing_done_future,
-            self.context.graphics_queue().clone(),
+        Ok(Box::new(present(
+            self.context.swapchain(),
+            image_future
+                .join(before.unwrap_or_else(|| Box::new(sync::now(self.context.device()))))
+                .then_execute(self.context.graphics_queue(), command_buffer)?,
+            self.context.graphics_queue(),
             image_index,
+        )))
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ComputeProgramCreationError {
+    #[error("Failed to create compute pipeline.")]
+    ComputePipelineCreationError(#[from] ComputePipelineCreationError),
+}
+
+#[derive(Error, Debug)]
+pub enum ComputeError {
+    #[error("Shader doesn't have an image descriptor.")]
+    NoImageDescriptor,
+    #[error("Failed to execute command buffer.")]
+    CommandBufferExecError(#[from] CommandBufferExecError),
+    #[error("Failed to create descriptor set.")]
+    DescriptorSetError(#[from] DescriptorSetError),
+    #[error("Ran out of memory.")]
+    OomError(#[from] OomError),
+    #[error("Failed to dispatch compute shader.")]
+    DispatchError(#[from] DispatchError),
+    #[error("Failed to build renderer command buffer.")]
+    BuildError(#[from] BuildError),
+}
+
+pub struct ComputeProgram {
+    context: Context,
+    pipeline: Arc<ComputePipeline>,
+}
+
+impl ComputeProgram {
+    pub fn new(
+        context: &Context,
+        shader: &ComputeEntryPoint,
+    ) -> Result<Self, ComputeProgramCreationError> {
+        let pipeline = Arc::new(ComputePipeline::new(
+            context.device(),
+            shader,
+            &(),
+            None,
+            |_| {},
+        )?);
+
+        Ok(Self {
+            context: context.clone(),
+            pipeline,
+        })
+    }
+
+    pub fn compute(
+        &self,
+        images: &[Arc<dyn ImageViewAbstract>],
+        dispatch_dimensions: [u32; 3],
+    ) -> Result<Box<dyn GpuFuture>, ComputeError> {
+        let mut set_builder = PersistentDescriptorSet::start(
+            self.pipeline
+                .layout()
+                .descriptor_set_layouts()
+                .get(0)
+                .ok_or(ComputeError::NoImageDescriptor)?
+                .clone(),
         );
 
-        Ok(())
+        for image in images {
+            set_builder.add_image(image.clone());
+        }
+
+        let set = set_builder.build()?;
+
+        let mut builder = AutoCommandBufferBuilder::primary(
+            self.context.device(),
+            self.context.compute_queue().family(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+
+        builder
+            .bind_pipeline_compute(self.pipeline.clone())
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.pipeline.layout().clone(),
+                0,
+                set,
+            )
+            .dispatch(dispatch_dimensions)?;
+
+        let commands = builder.build()?;
+
+        Ok(Box::new(
+            sync::now(self.context.device())
+                .then_execute(self.context.compute_queue(), commands)?,
+        ))
     }
 }
