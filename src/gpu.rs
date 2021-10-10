@@ -316,10 +316,11 @@ impl Renderer {
         })
     }
 
-    pub fn draw(
+    pub fn draw<Pc>(
         &self,
         input_images: &[Arc<dyn ImageViewAbstract>],
-        before: Option<Box<dyn GpuFuture>>,
+        before: Box<dyn GpuFuture>,
+        push_constants: Pc,
     ) -> Result<Box<dyn GpuFuture>, RendererDrawError> {
         let (image_index, _, image_future) =
             acquire_next_image(self.context.swapchain(), None).unwrap();
@@ -343,7 +344,7 @@ impl Renderer {
         );
 
         for image in input_images {
-            descriptor_set_builder.add_sampled_image(image.clone(), self.sampler.clone())?;
+            descriptor_set_builder.add_image(image.clone())?;
         }
 
         let set = Arc::new(descriptor_set_builder.build()?);
@@ -365,19 +366,24 @@ impl Renderer {
                 0,
                 set.clone(),
             )
+            .push_constants(self.pipeline.layout().clone(), 0, push_constants)
             .draw(6, 1, 0, 0)?
             .end_render_pass();
 
         let command_buffer = command_buffer_builder.build()?;
 
-        Ok(Box::new(present(
-            self.context.swapchain(),
-            image_future
-                .join(before.unwrap_or_else(|| Box::new(sync::now(self.context.device()))))
-                .then_execute(self.context.graphics_queue(), command_buffer)?,
-            self.context.graphics_queue(),
-            image_index,
-        )))
+        let future = image_future
+            .join(before)
+            .then_execute(self.context.graphics_queue(), command_buffer)?
+            .then_swapchain_present(
+                self.context.graphics_queue(),
+                self.context.swapchain(),
+                image_index,
+            )
+            .then_signal_fence_and_flush()
+            .unwrap();
+
+        Ok(future.boxed())
     }
 }
 
@@ -431,6 +437,7 @@ impl ComputeProgram {
         &self,
         images: &[Arc<dyn ImageViewAbstract>],
         dispatch_dimensions: [u32; 3],
+        before: Box<dyn GpuFuture>,
     ) -> Result<Box<dyn GpuFuture>, ComputeError> {
         let mut set_builder = PersistentDescriptorSet::start(
             self.pipeline
@@ -465,9 +472,8 @@ impl ComputeProgram {
 
         let commands = builder.build()?;
 
-        Ok(Box::new(
-            sync::now(self.context.device())
-                .then_execute(self.context.compute_queue(), commands)?,
-        ))
+        let future = before.then_execute(self.context.graphics_queue(), commands)?;
+
+        Ok(future.boxed())
     }
 }
