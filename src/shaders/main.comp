@@ -1,12 +1,16 @@
 #version 460
 #extension GL_EXT_debug_printf : require
 
+#define M_PI 3.1415926535897932384626433832795028841971693993751058209749445923078164062
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set=0, binding = 0, r32f) readonly uniform image2DArray input_f;
 layout(set=0, binding = 1, r32f) writeonly uniform image2DArray output_f;
 
 layout(push_constant) uniform PushConstants {
+    vec2 mouse_pos;
+    vec2 mouse_delta;
     bool init;
 } push_constants;
 
@@ -50,55 +54,80 @@ float f_eq(int i, float rho, vec2 p) {
     return W[i] * rho * (2 - sqrt(1 + 3 * u.x * u.x) ) * (2-sqrt(1+3*u.y*u.y)) * pow((2*u.x + sqrt(1 + 3*u.x*u.x)) / (1-u.x), c[i].x) * pow((2 * u.y + sqrt(1+ 3 * u.y *u.y)) / (1-u.y), c[i].y);
 }
 
-const float beta = 0.9995;
+const float beta = 0.99;
 
 void main() {
     float f [N];
 
     ivec2 dims = imageSize(input_f).xy;
 
+    vec2 pos = vec2(gl_GlobalInvocationID.xy) / vec2(dims.y);
+
     float rho = 0.0;
     vec2 p = vec2(0);
 
+    if(gl_GlobalInvocationID.x >= dims.x || gl_GlobalInvocationID.y >= dims.y) return;
+
     if(push_constants.init) {
-        vec2 pos = vec2(gl_GlobalInvocationID.xy) / vec2(dims);
+        
 
         float rho_init = 1.0;
-        vec2 p_init = vec2(0.5 * rho_init * sin(pos.x * 3.14159 * 2- 0.03 * sin(pos.y * 3.14159 * 20)) * (pos.y)*(1-pos.y),0);
+        vec2 u_init = vec2(0);
 
+        float l = length(pos - vec2(0.5));
+
+        /*if(abs(l - 0.3) <= 0.1) {
+            p_init = rho_init * 0.5 * vec2(0.5-pos.y, pos.x - 0.5) * sign(l-0.3);
+        }*/
+
+        /*if(length(pos - vec2(0.5,0.25)) > 0.01 && length(pos - vec2(0.5,0.75)) > 0.01 ) {
+
+            if(pos.y < 0.5) {
+                u_init = vec2(0.1, 0);
+            } else {
+                u_init = -vec2(0.1, -0);
+            }
+        
+        }*/
+
+        //u_init = vec2(0.1 * sin(8 * 3.14159 * l),0);
+
+        //u_init = 0.1 * vec2(cos(pos.x * 2 * M_PI) * sin(pos.y * 2 * M_PI), -sin(pos.x * 2 * M_PI) * cos(pos.y * 2 * M_PI));
+       
+        
         for(int i = 0; i < N; i++) {
-            f[i] = f_eq(i, rho_init, p_init);
+            f[i] = f_eq(i, rho_init, rho_init * u_init);
 
             rho += f[i];
             p += c[i] * f[i];
-        }
-
-        if(gl_GlobalInvocationID.xy == uvec2(100,100)) {
-            debugPrintfEXT("rho_init = %f, p_init = (%f %f) , rho = %f, p = (%f %f)\n", rho_init, p_init.x, p_init.y, rho, p.x ,p.y);
-
-            for(int i = 0; i < N; i++) {
-                debugPrintfEXT("f[%d] = %f\n", i, f[i]);
-            }
         }
     }
     else {
         for(int i = 0; i < N; i++) {
             f[i] = imageLoad(input_f, ivec3(gl_GlobalInvocationID.xy, i)).r;
-
             rho += f[i];
             p += c[i] * f[i];
-
-            
-        }
-
-        if(abs(rho) <= 0.001) {
-            debugPrintfEXT("rho very small: %f\n", rho);
         }
     }
 
+    float brush_size = 0.03;
+    float bl = length((push_constants.mouse_pos - pos) * vec2(dims.x/dims.y, 1));
+
+    if(bl <= brush_size-0.0001) {
+
+        vec2 delta_u = 0.02 * push_constants.mouse_delta * exp(-1/(1-(bl/brush_size)*(bl/brush_size)));
+
+        p = p + rho * delta_u;
+
+    }
+
+    //p -= p * 0.0001;
 
     for(int i = 0; i < N; i++) {
-        float f_next = f[i] + 2 * beta * (f_eq(i, rho, p) - f[i]);
+
+        vec2 u = p / rho;
+
+        float f_next = max(f[i] + 2 * beta * (f_eq(i, rho, rho * u) - f[i]), 0);
 
         ivec2 access = (ivec2(gl_GlobalInvocationID.xy) + dims + c[i]) % dims;
 

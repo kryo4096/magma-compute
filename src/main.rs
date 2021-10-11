@@ -10,13 +10,14 @@ use vulkano::image::{
 use vulkano::swapchain::{acquire_next_image, present};
 use vulkano::sync;
 use winit::dpi::PhysicalSize;
+use winit::monitor::{self, VideoMode};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use vulkano::sync::GpuFuture;
-use winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
+use winit::event::{ElementState, Event, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::{Window, WindowBuilder};
+use winit::window::{Fullscreen, Window, WindowBuilder};
 
 use crate::gpu::RendererCreationError;
 
@@ -46,20 +47,32 @@ mod cs {
 fn main() -> anyhow::Result<()> {
     let event_loop = EventLoop::new();
 
+    let mode = event_loop
+        .available_monitors()
+        .next()
+        .unwrap()
+        .video_modes()
+        .max()
+        .unwrap();
+
+    let size = mode.size();
+
     let window = Arc::new(
         WindowBuilder::new()
-            .with_inner_size(PhysicalSize {
-                width: 1024,
-                height: 1024,
-            })
+            .with_inner_size(size)
+            .with_max_inner_size(size)
+            .with_min_inner_size(size)
+            .with_fullscreen(Some(Fullscreen::Borderless(None)))
             .build(&event_loop)?,
     );
 
     let context = gpu::Context::new(&window)?;
 
     println!(
-        "GPU in use: {}",
-        context.physical_device().properties().device_name
+        "GPU in use: {}\n Resolution: {}x{}",
+        context.physical_device().properties().device_name,
+        size.width,
+        size.height
     );
 
     let vertex_shader = vs::Shader::load(context.device().clone()).unwrap();
@@ -74,12 +87,14 @@ fn main() -> anyhow::Result<()> {
 
     let dims = context.swapchain().dimensions();
 
+    let simulation_size = [dims[0] / 2, dims[1] / 2];
+
     let storage_images = vec![
         StorageImage::with_usage(
             context.device().clone(),
             ImageDimensions::Dim2d {
-                width: dims[0] as u32 * 4,
-                height: dims[1] as u32 * 4,
+                width: simulation_size[0] as u32,
+                height: simulation_size[1] as u32,
                 array_layers: 9,
             },
             Format::R32_SFLOAT,
@@ -94,8 +109,8 @@ fn main() -> anyhow::Result<()> {
         StorageImage::with_usage(
             context.device().clone(),
             ImageDimensions::Dim2d {
-                width: dims[0] as u32 * 4,
-                height: dims[1] as u32 * 4,
+                width: simulation_size[0] as u32,
+                height: simulation_size[1] as u32,
                 array_layers: 9,
             },
             Format::R32_SFLOAT,
@@ -111,8 +126,6 @@ fn main() -> anyhow::Result<()> {
 
     let compute_program = gpu::ComputeProgram::new(&context, &compute_shader.main_entry_point())?;
 
-    // let mut last_frame = Some(sync::now(context.device()).boxed());
-
     let mut layer = 0;
 
     let mut init = 1;
@@ -123,55 +136,116 @@ fn main() -> anyhow::Result<()> {
         .map(ImageView::new)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut compute_index = 0;
-    let mut render_index = 1;
+    let mut input_view = views[0].clone();
+    let mut output_view = views[1].clone();
 
     let mut last_frame = Instant::now();
+
+    let mut last_frame_end = Some(sync::now(context.device()).boxed());
+
+    let mut brightness = 1.0;
+
+    let mut mouse_pos = [0.0, 0.0];
+    let mut cursor_pos = [0.0, 0.0];
+    let mut mouse_pressed = false;
+    let mut mouse_delta = [0.0, 0.0];
 
     event_loop.run(move |event, _, flow| {
         match event {
             Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
+                event: window_event,
                 ..
-            } => *flow = ControlFlow::Exit,
-            Event::WindowEvent {
-                event: WindowEvent::KeyboardInput { input, .. },
-                ..
-            } => match input.virtual_keycode {
-                Some(VirtualKeyCode::P) if input.state == ElementState::Pressed => {
-                    layer = (layer + 1) % 9
+            } => match window_event {
+                WindowEvent::CloseRequested => *flow = ControlFlow::Exit,
+                WindowEvent::KeyboardInput { input, .. } => match input.virtual_keycode {
+                    Some(VirtualKeyCode::Period) if input.state == ElementState::Pressed => {
+                        brightness *= 1.1;
+                    }
+                    Some(VirtualKeyCode::Comma) if input.state == ElementState::Pressed => {
+                        brightness *= 0.9;
+                    }
+                    Some(VirtualKeyCode::Escape) => *flow = ControlFlow::Exit,
+                    _ => {}
+                },
+                WindowEvent::MouseInput {
+                    button: MouseButton::Left,
+                    state,
+                    ..
+                } => {
+                    if state == ElementState::Pressed {
+                        if !mouse_pressed {
+                            cursor_pos = mouse_pos;
+                        }
+
+                        mouse_pressed = true;
+                    }
+
+                    if state == ElementState::Released {
+                        mouse_pressed = false;
+                    }
+                }
+
+                WindowEvent::CursorMoved { position, .. } => {
+                    mouse_pos = [
+                        position.x as f32 / dims[1] as f32,
+                        position.y as f32 / dims[1] as f32,
+                    ];
                 }
                 _ => {}
             },
             Event::RedrawRequested(_) => {
-                let compute_future = compute_program
+                let mut compute_future = compute_program
                     .compute(
-                        &[views[compute_index].clone(), views[render_index].clone()],
-                        [dims[0] / 2, dims[1] / 2, 1],
-                        cs::ty::PushConstants { init },
+                        &[input_view.clone(), output_view.clone()],
+                        [simulation_size[0] / 8 + 1, simulation_size[1] / 8 + 1, 1],
+                        cs::ty::PushConstants {
+                            mouse_pos: cursor_pos,
+                            mouse_delta,
+                            init,
+                        },
                         sync::now(context.device()).boxed(),
                     )
                     .unwrap()
                     .boxed();
 
-                renderer
+                let render_future = renderer
                     .draw(
-                        &[views[render_index].clone()],
+                        &[output_view.clone()],
                         compute_future,
-                        fs::ty::PushConstants { layer },
+                        fs::ty::PushConstants { brightness },
                     )
                     .unwrap()
                     .boxed();
 
+                drop(render_future);
+
+                std::mem::swap(&mut input_view, &mut &mut output_view);
+
+                //last_frame_end = Some(render_future);
+
                 init = 0;
 
-                std::mem::swap(&mut compute_index, &mut render_index);
+                if mouse_pressed {
+                    mouse_delta = [
+                        0.5 * (mouse_pos[0] - cursor_pos[0]),
+                        0.5 * (mouse_pos[1] - cursor_pos[1]),
+                    ];
+                } else {
+                    mouse_delta = [0., 0.];
+                }
+
+                //cursor_pos[0] += mouse_delta[0];
+                //cursor_pos[1] += mouse_delta[1];
             }
             _ => {}
         }
-        if (Instant::now() - last_frame) > Duration::from_secs_f32(1. / 144.) {
-            window.request_redraw();
+
+        window.request_redraw();
+
+        /*
+        if (Instant::now() - last_frame) > Duration::from_secs_f32(1. / 240.) {
             last_frame = Instant::now();
         }
+        */
     });
 }

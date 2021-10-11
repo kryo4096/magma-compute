@@ -43,8 +43,8 @@ use vulkano::render_pass::{
 };
 use vulkano::sampler::{Filter, MipmapMode, Sampler, SamplerAddressMode, SamplerCreationError};
 use vulkano::swapchain::{
-    acquire_next_image, present, PresentMode, Surface, SurfaceCreationError, Swapchain,
-    SwapchainCreationError,
+    acquire_next_image, present, CapabilitiesError, PresentMode, Surface, SurfaceCreationError,
+    Swapchain, SwapchainCreationError,
 };
 use vulkano::sync::{self, GpuFuture};
 use vulkano::{OomError, Version};
@@ -69,6 +69,8 @@ pub enum ContextCreationError {
     SwapchainCreationError(#[from] SwapchainCreationError),
     #[error("Failed to create image views")]
     ImageViewCreationError(#[from] ImageViewCreationError),
+    #[error("Failed to get surface capabilities")]
+    CapabilitiesError(#[from] CapabilitiesError),
 }
 
 #[derive(Clone)]
@@ -129,10 +131,12 @@ impl Context {
             (device, queue.clone())
         };
 
+        let caps = surface.capabilities(physical_device)?;
+
         let (swapchain, swapchain_images) = Swapchain::start(device.clone(), surface.clone())
             .usage(ImageUsage::color_attachment())
-            .num_images(3)
-            .present_mode(PresentMode::Relaxed)
+            .num_images(5)
+            .present_mode(PresentMode::Immediate)
             .build()?;
 
         let image_views = swapchain_images
@@ -371,8 +375,8 @@ impl Renderer {
 
         let command_buffer = command_buffer_builder.build()?;
 
-        let future = image_future
-            .join(before)
+        let future = before
+            .join(image_future)
             .then_execute(self.context.queue(), command_buffer)?
             .then_swapchain_present(self.context.queue(), self.context.swapchain(), image_index)
             .then_signal_fence_and_flush()
