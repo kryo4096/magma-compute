@@ -1,18 +1,20 @@
 use anyhow::anyhow;
 use rand::Rng;
+use vulkano::buffer::view;
 use vulkano::format::{Format, Pixel};
-use vulkano::image::view::ImageView;
+use vulkano::image::view::{ImageView, ImageViewType};
 use vulkano::image::{
-    ImageCreateFlags, ImageDimensions, ImageUsage, ImmutableImage, MipmapsCount, StorageImage,
+    AttachmentImage, ImageCreateFlags, ImageDimensions, ImageUsage, ImmutableImage, MipmapsCount,
+    StorageImage,
 };
 use vulkano::swapchain::{acquire_next_image, present};
 use vulkano::sync;
 use winit::dpi::PhysicalSize;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use vulkano::sync::GpuFuture;
-use winit::event::{Event, WindowEvent};
+use winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
 
@@ -47,8 +49,8 @@ fn main() -> anyhow::Result<()> {
     let window = Arc::new(
         WindowBuilder::new()
             .with_inner_size(PhysicalSize {
-                width: 1600,
-                height: 900,
+                width: 1024,
+                height: 1024,
             })
             .build(&event_loop)?,
     );
@@ -72,56 +74,104 @@ fn main() -> anyhow::Result<()> {
 
     let dims = context.swapchain().dimensions();
 
-    let storage = StorageImage::new(
-        context.device().clone(),
-        ImageDimensions::Dim2d {
-            width: dims[0] as u32,
-            height: dims[1] as u32,
-            array_layers: 9,
-        },
-        Format::R32G32_SFLOAT,
-        [context.graphics_queue().family().clone()],
-    )?;
+    let storage_images = vec![
+        StorageImage::with_usage(
+            context.device().clone(),
+            ImageDimensions::Dim2d {
+                width: dims[0] as u32 * 4,
+                height: dims[1] as u32 * 4,
+                array_layers: 9,
+            },
+            Format::R32_SFLOAT,
+            ImageUsage {
+                sampled: true,
+                storage: true,
+                ..ImageUsage::none()
+            },
+            ImageCreateFlags::none(),
+            [context.queue().family().clone()],
+        )?,
+        StorageImage::with_usage(
+            context.device().clone(),
+            ImageDimensions::Dim2d {
+                width: dims[0] as u32 * 4,
+                height: dims[1] as u32 * 4,
+                array_layers: 9,
+            },
+            Format::R32_SFLOAT,
+            ImageUsage {
+                sampled: true,
+                storage: true,
+                ..ImageUsage::none()
+            },
+            ImageCreateFlags::none(),
+            [context.queue().family().clone()],
+        )?,
+    ];
 
     let compute_program = gpu::ComputeProgram::new(&context, &compute_shader.main_entry_point())?;
 
-    let view = ImageView::new(storage.clone())?;
+    // let mut last_frame = Some(sync::now(context.device()).boxed());
 
-    let mut last_frame = Some(sync::now(context.device()).boxed());
+    let mut layer = 0;
 
-    event_loop.run(move |event, _, flow| match event {
-        Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
-        } => *flow = ControlFlow::Exit,
-        Event::RedrawRequested(_) => {
-            let compute_future = compute_program
-                .compute(
-                    &[view.clone()],
-                    [dims[0] / 8, dims[1] / 8, 1],
-                    last_frame.take().expect(""),
-                )
-                .unwrap()
-                .then_signal_fence_and_flush()
-                .unwrap()
-                .boxed();
+    let mut init = 1;
 
-            last_frame = Some(
-                renderer
-                    .draw(
-                        &[view.clone()],
-                        compute_future,
-                        fs::ty::PushConstants {
-                            screen_width: dims[0],
-                            screen_height: dims[1],
-                        },
+    let views = storage_images
+        .iter()
+        .cloned()
+        .map(ImageView::new)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut compute_index = 0;
+    let mut render_index = 1;
+
+    let mut last_frame = Instant::now();
+
+    event_loop.run(move |event, _, flow| {
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => *flow = ControlFlow::Exit,
+            Event::WindowEvent {
+                event: WindowEvent::KeyboardInput { input, .. },
+                ..
+            } => match input.virtual_keycode {
+                Some(VirtualKeyCode::P) if input.state == ElementState::Pressed => {
+                    layer = (layer + 1) % 9
+                }
+                _ => {}
+            },
+            Event::RedrawRequested(_) => {
+                let compute_future = compute_program
+                    .compute(
+                        &[views[compute_index].clone(), views[render_index].clone()],
+                        [dims[0] / 2, dims[1] / 2, 1],
+                        cs::ty::PushConstants { init },
+                        sync::now(context.device()).boxed(),
                     )
                     .unwrap()
-                    .boxed(),
-            );
+                    .boxed();
 
-            std::thread::sleep(Duration::from_secs_f32(1. / 60.));
+                renderer
+                    .draw(
+                        &[views[render_index].clone()],
+                        compute_future,
+                        fs::ty::PushConstants { layer },
+                    )
+                    .unwrap()
+                    .boxed();
+
+                init = 0;
+
+                std::mem::swap(&mut compute_index, &mut render_index);
+            }
+            _ => {}
         }
-        _ => {}
+        if (Instant::now() - last_frame) > Duration::from_secs_f32(1. / 144.) {
+            window.request_redraw();
+            last_frame = Instant::now();
+        }
     });
 }

@@ -1,0 +1,10 @@
+UNASSIGNED-khronos-validation-createinstance-status-message(INFO / SPEC): msgNum: -671457468 - Validation Information: [ UNASSIGNED-khronos-validation-createinstance-status-message ] Object 0: handle = 0x1fe2cffa7e0, type = VK_OBJECT_TYPE_INSTANCE; | MessageID = 0xd7fa5f44 | Khronos Validation Layer Active:
+    Settings File: Found at C:\Users\jonas\AppData\Local\LunarG\vkconfig\override\vk_layer_settings.txt specified by VkConfig application override.
+    Current Enables: VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT.
+    Current Disables: None.
+
+    Objects: 1
+        [0] 0x1fe2cffa7e0, type: 1, name: NULL
+VUID-VkShaderModuleCreateInfo-pCode-04147(ERROR / SPEC): msgNum: 1028204675 - Validation Error: [ VUID-VkShaderModuleCreateInfo-pCode-04147 ] Object 0: handle = 0x1fe2d9eecb0, type = VK_OBJECT_TYPE_DEVICE; | MessageID = 0x3d492883 | vkCreateShaderModule(): The SPIR-V Extension (SPV_KHR_non_semantic_info) was declared, but none of the requirements were met to use it. The Vulkan spec states: If pCode declares any of the SPIR-V extensions listed in the SPIR-V Environment appendix, one of the corresponding requirements must be satisfied (https://vulkan.lunarg.com/doc/view/1.2.189.2/windows/1.2-extensions/vkspec.html#VUID-VkShaderModuleCreateInfo-pCode-04147)
+    Objects: 1
+        [0] 0x1fe2d9eecb0, type: 3, name: NULL

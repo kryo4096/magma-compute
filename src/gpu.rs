@@ -43,7 +43,8 @@ use vulkano::render_pass::{
 };
 use vulkano::sampler::{Filter, MipmapMode, Sampler, SamplerAddressMode, SamplerCreationError};
 use vulkano::swapchain::{
-    acquire_next_image, present, Surface, SurfaceCreationError, Swapchain, SwapchainCreationError,
+    acquire_next_image, present, PresentMode, Surface, SurfaceCreationError, Swapchain,
+    SwapchainCreationError,
 };
 use vulkano::sync::{self, GpuFuture};
 use vulkano::{OomError, Version};
@@ -76,8 +77,7 @@ pub struct Context {
     instance: Arc<Instance>,
     phys_index: usize,
     device: Arc<Device>,
-    graphics_queue: Arc<Queue>,
-    compute_queue: Arc<Queue>,
+    queue: Arc<Queue>,
     swapchain: Arc<Swapchain<Arc<Window>>>,
     swapchain_images: Arc<Vec<Arc<SwapchainImage<Arc<Window>>>>>,
     swapchain_image_views: Arc<Vec<Arc<ImageView<Arc<SwapchainImage<Arc<Window>>>>>>>,
@@ -105,8 +105,11 @@ impl Context {
 
         let queue_families = QueueFamilies::find(&physical_device, &surface)?;
 
-        let (device, graphics_queue, compute_queue) = {
-            let features = Features::none();
+        let (device, queue) = {
+            let features = Features {
+                shader_storage_image_extended_formats: true,
+                ..Features::none()
+            };
 
             let device_extensions = DeviceExtensions {
                 khr_swapchain: true,
@@ -123,12 +126,13 @@ impl Context {
 
             let queue = queues.next().unwrap();
 
-            (device, queue.clone(), queue)
+            (device, queue.clone())
         };
 
         let (swapchain, swapchain_images) = Swapchain::start(device.clone(), surface.clone())
             .usage(ImageUsage::color_attachment())
             .num_images(3)
+            .present_mode(PresentMode::Relaxed)
             .build()?;
 
         let image_views = swapchain_images
@@ -141,8 +145,7 @@ impl Context {
             instance,
             phys_index,
             device,
-            graphics_queue,
-            compute_queue,
+            queue,
             swapchain,
             swapchain_images: Arc::new(swapchain_images),
             swapchain_image_views: Arc::new(image_views),
@@ -165,12 +168,8 @@ impl Context {
         self.device.clone()
     }
 
-    pub fn graphics_queue(&self) -> Arc<Queue> {
-        self.graphics_queue.clone()
-    }
-
-    pub fn compute_queue(&self) -> Arc<Queue> {
-        self.compute_queue.clone()
+    pub fn queue(&self) -> Arc<Queue> {
+        self.queue.clone()
     }
 
     pub fn swapchain(&self) -> Arc<Swapchain<Arc<Window>>> {
@@ -335,7 +334,7 @@ impl Renderer {
 
         let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
             self.context.device(),
-            self.context.graphics_queue().family(),
+            self.context.queue().family(),
             CommandBufferUsage::OneTimeSubmit,
         )?;
 
@@ -344,7 +343,7 @@ impl Renderer {
         );
 
         for image in input_images {
-            descriptor_set_builder.add_image(image.clone())?;
+            descriptor_set_builder.add_sampled_image(image.clone(), self.sampler.clone())?;
         }
 
         let set = Arc::new(descriptor_set_builder.build()?);
@@ -374,12 +373,8 @@ impl Renderer {
 
         let future = image_future
             .join(before)
-            .then_execute(self.context.graphics_queue(), command_buffer)?
-            .then_swapchain_present(
-                self.context.graphics_queue(),
-                self.context.swapchain(),
-                image_index,
-            )
+            .then_execute(self.context.queue(), command_buffer)?
+            .then_swapchain_present(self.context.queue(), self.context.swapchain(), image_index)
             .then_signal_fence_and_flush()
             .unwrap();
 
@@ -433,10 +428,11 @@ impl ComputeProgram {
         })
     }
 
-    pub fn compute(
+    pub fn compute<Pc>(
         &self,
         images: &[Arc<dyn ImageViewAbstract>],
         dispatch_dimensions: [u32; 3],
+        push_constants: Pc,
         before: Box<dyn GpuFuture>,
     ) -> Result<Box<dyn GpuFuture>, ComputeError> {
         let mut set_builder = PersistentDescriptorSet::start(
@@ -456,7 +452,7 @@ impl ComputeProgram {
 
         let mut builder = AutoCommandBufferBuilder::primary(
             self.context.device(),
-            self.context.compute_queue().family(),
+            self.context.queue().family(),
             CommandBufferUsage::OneTimeSubmit,
         )?;
 
@@ -468,11 +464,12 @@ impl ComputeProgram {
                 0,
                 set,
             )
+            .push_constants(self.pipeline.layout().clone(), 0, push_constants)
             .dispatch(dispatch_dimensions)?;
 
         let commands = builder.build()?;
 
-        let future = before.then_execute(self.context.graphics_queue(), commands)?;
+        let future = before.then_execute(self.context.queue(), commands)?;
 
         Ok(future.boxed())
     }
