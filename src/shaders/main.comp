@@ -70,28 +70,9 @@ void main() {
     if(gl_GlobalInvocationID.x >= dims.x || gl_GlobalInvocationID.y >= dims.y) return;
 
     if(push_constants.init) {
-        
-
         float rho_init = 1.0;
-        vec2 u_init = vec2(0.1,0);
+        vec2 u_init = vec2(0,0);
 
-        float l = length(pos - vec2(0.5));
-
-        /*if(abs(l - 0.3) <= 0.1) {
-            p_init = rho_init * 0.5 * vec2(0.5-pos.y, pos.x - 0.5) * sign(l-0.3);
-        }*/
-
-        /*if(length(pos - vec2(0.5,0.25)) > 0.01 && length(pos - vec2(0.5,0.75)) > 0.01 ) {
-
-            if(pos.y < 0.5) {
-                u_init = vec2(0.1, 0);
-            } else {
-                u_init = -vec2(0.1, -0);
-            }
-        
-        }*/
-
-        //u_init = vec2(0.1 * sin(8 * 3.14159 * l),0);
 
         //u_init = 0.1 * vec2(cos(pos.x * 2 * M_PI) * sin(pos.y * 2 * M_PI), -sin(pos.x * 2 * M_PI) * cos(pos.y * 2 * M_PI));
        
@@ -111,25 +92,15 @@ void main() {
         }
     }
 
-    float brush_size = 0.05;
-    float bl = length((push_constants.mouse_pos - pos) * vec2(dims.x/dims.y, 1));
+    float brush_size = 10.0 / dims[1];
+    float bl = length((push_constants.mouse_pos - pos));
 
     if(bl <= brush_size) {
+        vec2 delta_u = 0.01 * push_constants.mouse_delta;
 
-        vec2 delta_u = 0.05 * push_constants.mouse_delta * exp(-1/(1-(bl/brush_size)*(bl/brush_size)));
-
-        p = p + rho * delta_u;
-
-        float new_rho = 0;
-
-        for(int i = 0; i < 9; i++) {
-            new_rho += f[i];
+        if(dot(p / rho, delta_u) / length(delta_u) < 0.9) { 
+            p = p + rho * delta_u;
         }
-
-        for(int i = 0; i < 9; i++) {
-            f[i] *= rho / new_rho;
-        }
-
     }
 
     p -= p * 0.001 * push_constants.dissipation;
@@ -137,10 +108,6 @@ void main() {
     for(int i = 0; i < N; i++) {
 
         vec2 u = p / rho;
-
-        if(length(pos - vec2(0.5)) < 0.01) { 
-            u += vec2(0.001,0.0); 
-        }
 
         float f_next = max(f[i] + 2 * beta * (f_eq(i, rho, rho * u) - f[i]), 0);
 

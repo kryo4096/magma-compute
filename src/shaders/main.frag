@@ -46,11 +46,11 @@ void main() {
         P += f[i] * dot(c[i] , c[i]);
     }
 
-    //float v = pow(length(p) * push_constants.brightness, 1.3);
+    float v = pow(length(p) * push_constants.brightness, 1.3);
 
-    float v = pow(P * push_constants.brightness, 1.3);
+    //float v = pow(P * push_constants.brightness, 1.3);
 
-    vec3 rgb = hsv2rgb(vec3(0.0 + v * 0.1, 1.0-v, 0.99*v + 0.01));
+    vec3 rgb = hsv2rgb(vec3(0.0 + v * 0.1, 1.0, 0.99*v + 0.01));
 
     f_color = vec4(vec3(rgb), 1.0);
  

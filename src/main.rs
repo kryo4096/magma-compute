@@ -75,7 +75,7 @@ fn main() -> anyhow::Result<()> {
         fragment_shader.main_entry_point(),
     )?;
 
-    let simulation_size = [dims[0], dims[1]];
+    let simulation_size = [dims[0] / 2, dims[1] / 2];
 
     let storage_images = vec![
         StorageImage::with_usage(
@@ -186,12 +186,11 @@ fn main() -> anyhow::Result<()> {
                         position.y as f32 / dims[1] as f32,
                     ];
 
-                    if mouse_pressed {
+                    /*if mouse_pressed {
                         compute_uniforms.mouse_delta[0] = (new_mouse_pos[0] - mouse_pos[0]) * 60.;
                         compute_uniforms.mouse_delta[1] = (new_mouse_pos[1] - mouse_pos[1]) * 60.;
-                    }
+                    }*/
 
-                    compute_uniforms.mouse_pos = new_mouse_pos;
                     mouse_pos = new_mouse_pos;
                 }
                 _ => {}
@@ -222,16 +221,16 @@ fn main() -> anyhow::Result<()> {
 
                 compute_uniforms.init = 0;
 
-                /*if mouse_pressed {
+                if mouse_pressed {
                     compute_uniforms.mouse_delta = [
                         0.5 * (mouse_pos[0] - cursor_pos[0]),
                         0.5 * (mouse_pos[1] - cursor_pos[1]),
                     ];
                 } else {
                     compute_uniforms.mouse_delta = [0., 0.];
-                }*/
+                }
 
-                compute_uniforms.mouse_delta = [0.0, 0.0];
+                compute_uniforms.mouse_pos = cursor_pos;
             }
             _ => {}
         }
