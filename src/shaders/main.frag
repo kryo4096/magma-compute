@@ -29,11 +29,7 @@ vec3 hsv2rgb(vec3 c)
     return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
 
-float atan2(float y, float x)
-{
-    bool s = (abs(x) > abs(y));
-    return mix(3.14159/2.0 - atan(x,y), atan(y,x), s);
-}
+
 
 void main() {
 
@@ -41,17 +37,21 @@ void main() {
 
     float rho = 0;
     vec2 p = vec2(0);
+    float P = 0;
 
     for(int i = 0; i < 9; i++) {
         f[i] = texture(tex, vec3(uv,i)).r;
         rho += f[i];
         p += f[i] * c[i];
+        P += f[i] * dot(c[i] , c[i]);
     }
 
-    float v = pow(length(p) * push_constants.brightness, 1.3);
+    //float v = pow(length(p) * push_constants.brightness, 1.3);
 
-    //vec3 rgb = hsv2rgb(vec3(atan2(p.y,p.x) / 2 / 3.14159, 1.0, v));
+    float v = pow(P * push_constants.brightness, 1.3);
 
-    f_color = vec4(vec3(v), 1.0);
+    vec3 rgb = hsv2rgb(vec3(0.0 + v * 0.1, 1.0-v, 0.99*v + 0.01));
+
+    f_color = vec4(vec3(rgb), 1.0);
  
 }
