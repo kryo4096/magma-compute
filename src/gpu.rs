@@ -43,8 +43,8 @@ use vulkano::render_pass::{
 };
 use vulkano::sampler::{Filter, MipmapMode, Sampler, SamplerAddressMode, SamplerCreationError};
 use vulkano::swapchain::{
-    acquire_next_image, present, CapabilitiesError, PresentMode, Surface, SurfaceCreationError,
-    Swapchain, SwapchainCreationError,
+    acquire_next_image, present, AcquireError, CapabilitiesError, PresentMode, Surface,
+    SurfaceCreationError, Swapchain, SwapchainCreationError,
 };
 use vulkano::sync::{self, GpuFuture};
 use vulkano::{OomError, Version};
@@ -73,6 +73,8 @@ pub enum ContextCreationError {
     CapabilitiesError(#[from] CapabilitiesError),
 }
 
+type TargetImage = Arc<SwapchainImage<Arc<Window>>>;
+
 #[derive(Clone)]
 pub struct Context {
     window: Arc<Window>,
@@ -80,9 +82,10 @@ pub struct Context {
     phys_index: usize,
     device: Arc<Device>,
     queue: Arc<Queue>,
+    surface: Arc<Surface<Arc<Window>>>,
     swapchain: Arc<Swapchain<Arc<Window>>>,
-    swapchain_images: Arc<Vec<Arc<SwapchainImage<Arc<Window>>>>>,
-    swapchain_image_views: Arc<Vec<Arc<ImageView<Arc<SwapchainImage<Arc<Window>>>>>>>,
+    swapchain_images: Arc<Vec<TargetImage>>,
+    swapchain_image_views: Arc<Vec<Arc<ImageView<TargetImage>>>>,
 }
 
 impl Context {
@@ -128,7 +131,7 @@ impl Context {
 
             let queue = queues.next().unwrap();
 
-            (device, queue.clone())
+            (device, queue)
         };
 
         let caps = surface.capabilities(physical_device)?;
@@ -150,6 +153,7 @@ impl Context {
             phys_index,
             device,
             queue,
+            surface,
             swapchain,
             swapchain_images: Arc::new(swapchain_images),
             swapchain_image_views: Arc::new(image_views),
@@ -176,6 +180,10 @@ impl Context {
         self.queue.clone()
     }
 
+    pub fn surface(&self) -> Arc<Surface<Arc<Window>>> {
+        self.surface.clone()
+    }
+
     pub fn swapchain(&self) -> Arc<Swapchain<Arc<Window>>> {
         self.swapchain.clone()
     }
@@ -184,9 +192,7 @@ impl Context {
         self.swapchain_images.clone()
     }
 
-    pub fn swapchain_image_views(
-        &self,
-    ) -> Arc<Vec<Arc<ImageView<Arc<SwapchainImage<Arc<Window>>>>>>> {
+    pub fn swapchain_image_views(&self) -> Arc<Vec<Arc<ImageView<TargetImage>>>> {
         self.swapchain_image_views.clone()
     }
 }
@@ -218,7 +224,7 @@ impl<'a> QueueFamilies<'a> {
         vec![(self.graphics, 1.0)]
     }
 }
-
+#[allow(clippy::enum_variant_names)]
 #[derive(Error, Debug)]
 pub enum RendererCreationError {
     #[error("Failed to create render pass.")]
@@ -229,6 +235,7 @@ pub enum RendererCreationError {
     SamplerCreationError(#[from] SamplerCreationError),
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Error, Debug)]
 pub enum RendererDrawError {
     #[error("Ran out of memory.")]
@@ -299,8 +306,8 @@ impl Renderer {
 
         let sampler = Sampler::new(
             context.device(),
-            Filter::Nearest,
-            Filter::Nearest,
+            Filter::Linear,
+            Filter::Linear,
             MipmapMode::Nearest,
             SamplerAddressMode::Repeat,
             SamplerAddressMode::Repeat,
@@ -326,7 +333,16 @@ impl Renderer {
         push_constants: Pc,
     ) -> Result<Box<dyn GpuFuture>, RendererDrawError> {
         let (image_index, _, image_future) =
-            acquire_next_image(self.context.swapchain(), None).unwrap();
+            match acquire_next_image(self.context.swapchain(), None) {
+                Err(AcquireError::OutOfDate) => {
+                    //let caps = self.context.surface().capabilities(self.context.physical_device()).unwrap();
+
+                    self.context.swapchain().recreate().build();
+                    acquire_next_image(self.context.swapchain(), None).unwrap()
+                }
+                Ok(t) => t,
+                Err(err) => panic!("{:?}", err),
+            };
 
         let framebuffer = Arc::new(
             Framebuffer::start(self.render_pass.clone())
@@ -367,7 +383,7 @@ impl Renderer {
                 PipelineBindPoint::Graphics,
                 self.pipeline.layout().clone(),
                 0,
-                set.clone(),
+                set,
             )
             .push_constants(self.pipeline.layout().clone(), 0, push_constants)
             .draw(6, 1, 0, 0)?

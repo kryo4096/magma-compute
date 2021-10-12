@@ -12,6 +12,7 @@ layout(push_constant) uniform PushConstants {
     vec2 mouse_pos;
     vec2 mouse_delta;
     bool init;
+    float dissipation;
 } push_constants;
 
 const int N = 9;
@@ -72,7 +73,7 @@ void main() {
         
 
         float rho_init = 1.0;
-        vec2 u_init = vec2(0);
+        vec2 u_init = vec2(0.1,0);
 
         float l = length(pos - vec2(0.5));
 
@@ -110,22 +111,36 @@ void main() {
         }
     }
 
-    float brush_size = 0.03;
+    float brush_size = 0.05;
     float bl = length((push_constants.mouse_pos - pos) * vec2(dims.x/dims.y, 1));
 
-    if(bl <= brush_size-0.0001) {
+    if(bl <= brush_size) {
 
-        vec2 delta_u = 0.02 * push_constants.mouse_delta * exp(-1/(1-(bl/brush_size)*(bl/brush_size)));
+        vec2 delta_u = 0.05 * push_constants.mouse_delta * exp(-1/(1-(bl/brush_size)*(bl/brush_size)));
 
         p = p + rho * delta_u;
 
+        float new_rho = 0;
+
+        for(int i = 0; i < 9; i++) {
+            new_rho += f[i];
+        }
+
+        for(int i = 0; i < 9; i++) {
+            f[i] *= rho / new_rho;
+        }
+
     }
 
-    //p -= p * 0.0001;
+    p -= p * 0.001 * push_constants.dissipation;
 
     for(int i = 0; i < N; i++) {
 
         vec2 u = p / rho;
+
+        if(length(pos - vec2(0.5)) < 0.01) { 
+            u += vec2(0.001,0.0); 
+        }
 
         float f_next = max(f[i] + 2 * beta * (f_eq(i, rho, rho * u) - f[i]), 0);
 
