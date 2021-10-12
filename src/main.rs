@@ -110,6 +110,22 @@ fn main() -> anyhow::Result<()> {
             ImageCreateFlags::none(),
             [context.queue().family()],
         )?,
+        StorageImage::with_usage(
+            context.device(),
+            ImageDimensions::Dim2d {
+                width: simulation_size[0] as u32,
+                height: simulation_size[1] as u32,
+                array_layers: 1,
+            },
+            Format::R8_UINT,
+            ImageUsage {
+                sampled: true,
+                storage: true,
+                ..ImageUsage::none()
+            },
+            ImageCreateFlags::none(),
+            [context.queue().family()],
+        )?,
     ];
 
     let compute_program = gpu::ComputeProgram::new(&context, &compute_shader.main_entry_point())?;
@@ -198,7 +214,7 @@ fn main() -> anyhow::Result<()> {
             Event::RedrawRequested(_) => {
                 let compute_future = compute_program
                     .compute(
-                        &[input_view.clone(), output_view.clone()],
+                        &[input_view.clone(), output_view.clone(), views[2].clone()],
                         [simulation_size[0] / 8 + 1, simulation_size[1] / 8 + 1, 1],
                         compute_uniforms,
                         sync::now(context.device()).boxed(),
@@ -208,7 +224,7 @@ fn main() -> anyhow::Result<()> {
 
                 let render_future = renderer
                     .draw(
-                        &[output_view.clone()],
+                        &[output_view.clone(), views[2].clone()],
                         compute_future,
                         fs::ty::PushConstants { brightness },
                     )
