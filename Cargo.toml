@@ -1,5 +1,5 @@
 [package]
-name = "magma-compute"
+name = "magma-lbm"
 version = "0.1.0"
 authors = ["Jonas Luther <kryo4096@gmail.com>"]
 edition = "2018"

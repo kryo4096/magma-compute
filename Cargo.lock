@@ -524,7 +524,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "magma-compute"
+name = "magma-lbm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
